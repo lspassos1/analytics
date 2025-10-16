@@ -1,0 +1,64 @@
+Ferramenta de Análise com API Dupla
+Instruções: Digite os tickers (ex: PETR4.SA, AAPL), clique no botão e passe o rato sobre os (?) para ver as explicações.
+Ativos:
+
+Analisar Ativos
+Buscando dados para BBDC3.SA...
+Análise Quantitativa: BBDC3.SA
+Scores por Pilar (0-3)
+Valor (Graham) (?)	
+1.50
+Qualidade & Renda (Buffett) (?)	
+2.25
+Crescimento (Lynch) (?)	
+3.00
+Pontuação Final por Perfil (0-3)
+Conservador	
+2.03
+Moderado	
+2.25
+Agressivo	
+2.51
+Dados Coletados das APIs
+Métrica	Valor
+P/L (?)	8.01
+P/VP (?)	0.91
+Divida Liquida EBITDA (?)	N/D
+EV EBITDA (?)	N/D
+Dividend Yield (?)	140.00
+ROE (?)	12.35
+Margem Liquida (?)	23.56
+Crescimento LPA 5A (?)	47.40
+Consistencia Lucro 5A (?)	1.00
+Buscando dados para AURE3.SA...
+FALHA CRÍTICA: Não foi possível obter dados essenciais (P/L ou P/VP) para AURE3.SA de nenhuma API.
+Buscando dados para PETR4.SA...
+Análise Quantitativa: PETR4.SA
+Scores por Pilar (0-3)
+Valor (Graham) (?)	
+0.75
+Qualidade & Renda (Buffett) (?)	
+2.75
+Crescimento (Lynch) (?)	
+0.00
+Pontuação Final por Perfil (0-3)
+Conservador	
+1.68
+Moderado	
+1.33
+Agressivo	
+1.07
+Dados Coletados das APIs
+Métrica	Valor
+P/L (?)	5.02
+P/VP (?)	5.19
+Divida Liquida EBITDA (?)	N/D
+EV EBITDA (?)	13.33
+Dividend Yield (?)	1239.00
+ROE (?)	18.48
+Margem Liquida (?)	15.19
+Crescimento LPA 5A (?)	0.00
+Consistencia Lucro 5A (?)	1.00
+Buscando dados para CMIG4...
+ERROR:yfinance:HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: CMIG4"}}}
+FALHA CRÍTICA: Não foi possível obter dados essenciais (P/L ou P/VP) para CMIG4 de nenhuma API.
