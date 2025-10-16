@@ -1,64 +1,208 @@
-Ferramenta de Análise com API Dupla
-Instruções: Digite os tickers (ex: PETR4.SA, AAPL), clique no botão e passe o rato sobre os (?) para ver as explicações.
-Ativos:
+# CÉLULA ÚNICA - Copie e cole todo este código em uma única célula do Colab
 
-Analisar Ativos
-Buscando dados para BBDC3.SA...
-Análise Quantitativa: BBDC3.SA
-Scores por Pilar (0-3)
-Valor (Graham) (?)	
-1.50
-Qualidade & Renda (Buffett) (?)	
-2.25
-Crescimento (Lynch) (?)	
-3.00
-Pontuação Final por Perfil (0-3)
-Conservador	
-2.03
-Moderado	
-2.25
-Agressivo	
-2.51
-Dados Coletados das APIs
-Métrica	Valor
-P/L (?)	8.01
-P/VP (?)	0.91
-Divida Liquida EBITDA (?)	N/D
-EV EBITDA (?)	N/D
-Dividend Yield (?)	140.00
-ROE (?)	12.35
-Margem Liquida (?)	23.56
-Crescimento LPA 5A (?)	47.40
-Consistencia Lucro 5A (?)	1.00
-Buscando dados para AURE3.SA...
-FALHA CRÍTICA: Não foi possível obter dados essenciais (P/L ou P/VP) para AURE3.SA de nenhuma API.
-Buscando dados para PETR4.SA...
-Análise Quantitativa: PETR4.SA
-Scores por Pilar (0-3)
-Valor (Graham) (?)	
-0.75
-Qualidade & Renda (Buffett) (?)	
-2.75
-Crescimento (Lynch) (?)	
-0.00
-Pontuação Final por Perfil (0-3)
-Conservador	
-1.68
-Moderado	
-1.33
-Agressivo	
-1.07
-Dados Coletados das APIs
-Métrica	Valor
-P/L (?)	5.02
-P/VP (?)	5.19
-Divida Liquida EBITDA (?)	N/D
-EV EBITDA (?)	13.33
-Dividend Yield (?)	1239.00
-ROE (?)	18.48
-Margem Liquida (?)	15.19
-Crescimento LPA 5A (?)	0.00
-Consistencia Lucro 5A (?)	1.00
-Buscando dados para CMIG4...
-ERROR:yfinance:HTTP Error 404: {"quoteSummary":{"result":null,"error":{"code":"Not Found","description":"Quote not found for symbol: CMIG4"}}}
-FALHA CRÍTICA: Não foi possível obter dados essenciais (P/L ou P/VP) para CMIG4 de nenhuma API.
+# ==============================================================================
+# 1. INSTALAÇÃO E IMPORTAÇÃO DAS BIBLIOTECAS
+# ==============================================================================
+!pip install yfinance investpy -q
+
+import yfinance as yf
+import investpy
+import pandas as pd
+import ipywidgets as widgets
+from IPython.display import display, clear_output, HTML
+import time
+import re
+
+# ==============================================================================
+# 2. DICIONÁRIO DE EXPLICAÇÕES (TOOLTIPS)
+# ==============================================================================
+TOOLTIPS = {
+    "P/L": "Preço / Lucro: Mede quão 'barato' está o ativo em relação ao lucro que gera. Verde (<15) é ideal para a estratégia de Valor.",
+    "P/VP": "Preço / Valor Patrimonial: Compara o preço de mercado com o valor contábil da empresa. Verde (<1.5) sugere que se paga um preço justo pelos ativos.",
+    "Divida_Liquida_EBITDA": "Dívida Líquida / EBITDA: Mostra a capacidade de pagamento da dívida da empresa. Verde (<3.0) indica uma saúde financeira robusta.",
+    "EV_EBITDA": "Valor da Firma / EBITDA: Uma versão mais completa do P/L, boa para comparar empresas. Verde (<12) é considerado atrativo.",
+    "Dividend_Yield": "Rendimento de Dividendos: O retorno em dividendos em relação ao preço. Verde (>4%) é excelente para estratégias de renda passiva (Bazin).",
+    "ROE": "Retorno sobre o Patrimônio: Mede a rentabilidade da empresa para o acionista. Verde (>15%) é um sinal de alta qualidade e eficiência (Buffett).",
+    "Margem_Liquida": "Margem Líquida: Percentagem de receita que se transforma em lucro. Verde (>8%) indica bom controlo de custos e poder de preço.",
+    "Crescimento_LPA_5A": "Crescimento do Lucro por Ação: Mede a taxa de crescimento dos lucros. Verde (>10%) é fundamental para estratégias de crescimento (Lynch).",
+    "PEG_Ratio": "P/L / Crescimento do LPA: Relaciona o preço com o crescimento. Verde (<1.5) sugere que o crescimento não está sobrevalorizado (Lynch)."
+}
+
+# ==============================================================================
+# 3. FUNÇÕES DE COLETA E VALIDAÇÃO DE DADOS (LÓGICA AVANÇADA)
+# ==============================================================================
+
+def find_correct_ticker(ticker):
+    """
+    Analisa o ticker e aplica correções comuns, como adicionar .SA para
+    ações brasileiras se o sufixo estiver em falta.
+    """
+    ticker = ticker.upper().strip()
+    # Padrão para tickers brasileiros: 4 letras e 1 ou 2 números (ex: PETR4, ITUB11)
+    if re.match(r'^[A-Z]{4}\d{1,2}$', ticker) and not ticker.endswith('.SA'):
+        corrected_ticker = f"{ticker}.SA"
+        print(f"INFO: Ticker '{ticker}' corresponde ao padrão brasileiro. Tentando como '{corrected_ticker}'.")
+        return corrected_ticker
+    # Se não, assume que é um ticker internacional (ex: AAPL) ou já está formatado
+    return ticker
+
+def sanitize_data(data):
+    """Filtro de sanidade para remover e sinalizar dados anómalos."""
+    if data.get("Dividend_Yield") is not None and data["Dividend_Yield"] > 100:
+        print(f"INFO: Dividend Yield anómalo ({data['Dividend_Yield']:.2f}%) detectado. O dado será descartado.")
+        data["Dividend_Yield"] = None
+    return data
+
+def get_asset_data(ticker):
+    """
+    Função mestre que orquestra a busca de dados, com correção de ticker e fallback entre APIs.
+    """
+    corrected_ticker = find_correct_ticker(ticker)
+    print(f"Buscando dados para {corrected_ticker}...")
+    
+    # --- API 1: Yahoo Finance (Fonte Primária) ---
+    try:
+        stock = yf.Ticker(corrected_ticker)
+        info = stock.info
+        if not info or 'symbol' not in info: raise ValueError("Ticker não encontrado")
+        
+        data = {
+            "P/L": info.get('trailingPE'), "P/VP": info.get('priceToBook'),
+            "Divida_Liquida_EBITDA": info.get('debtToEbitda'), "EV_EBITDA": info.get('enterpriseToEbitda'),
+            "Dividend_Yield": (info.get('dividendYield') or 0) * 100, "ROE": (info.get('returnOnEquity') or 0) * 100,
+            "Margem_Liquida": (info.get('profitMargins') or 0) * 100, "Crescimento_LPA_5A": (info.get('earningsQuarterlyGrowth') or 0) * 100
+        }
+        try:
+            financials = stock.financials
+            data["Consistencia_Lucro_5A"] = all(financials.loc['Net Income'].dropna() > 0)
+        except Exception: data["Consistencia_Lucro_5A"] = False
+    except Exception:
+        print(f"AVISO: Falha ao obter dados primários para {corrected_ticker} via yfinance.")
+        data = {} # Inicia com dicionário vazio se a fonte primária falhar
+
+    # --- API 2: Investing.com (Fonte Secundária para Fallback) ---
+    if any(value is None for value in data.values()) or not data:
+        print("INFO: Tentando preencher dados em falta com a API secundária (investpy)...")
+        try:
+            country = 'brazil' if '.SA' in corrected_ticker else 'united states'
+            stock_symbol = corrected_ticker.replace('.SA', '')
+            search_result = investpy.search_quotes(text=stock_symbol, products=['stocks'], countries=[country], n_results=1)
+            
+            # Preenche apenas os dados que estão em falta (None)
+            if data.get('P/L') is None: data['P/L'] = search_result.pe_ratio
+            if data.get('Dividend_Yield') is None: data['Dividend_Yield'] = search_result.dividend_yield
+        except Exception as e:
+            print(f"AVISO: API secundária também falhou. {e}")
+
+    # --- Validação Final ---
+    if not data or data.get('P/L') is None or data.get('P/VP') is None:
+        print(f"FALHA CRÍTICA: Não foi possível obter dados essenciais (P/L ou P/VP) para {corrected_ticker}.")
+        return None
+
+    return sanitize_data(data)
+
+# ==============================================================================
+# 4. FUNÇÃO DE ANÁLISE (SCORE ADAPTATIVO) - SEM ALTERAÇÕES
+# ==============================================================================
+def analyze_asset(data):
+    scores = {}
+    score_valor, count_valor = 0, 0
+    if data.get("P/L") is not None:
+        count_valor += 1
+        if data["P/L"] < 10: score_valor += 3
+        elif data["P/L"] <= 15: score_valor += 2
+    if data.get("P/VP") is not None:
+        count_valor += 1
+        if data["P/VP"] < 1.0: score_valor += 3
+        elif data["P/VP"] <= 1.5: score_valor += 2
+    if data.get("Divida_Liquida_EBITDA") is not None:
+        count_valor += 1
+        if data["Divida_Liquida_EBITDA"] < 1.5: score_valor += 3
+        elif data["Divida_Liquida_EBITDA"] <= 3.0: score_valor += 2
+    if data.get("EV_EBITDA") is not None:
+        count_valor += 1
+        if data["EV_EBITDA"] < 8: score_valor += 3
+        elif data["EV_EBITDA"] <= 12: score_valor += 2
+    scores['valor'] = round(score_valor / count_valor, 2) if count_valor > 0 else 0
+    score_qualidade, count_qualidade = 0, 0
+    if data.get("Dividend_Yield") is not None:
+        count_qualidade += 1
+        if data["Dividend_Yield"] > 6: score_qualidade += 3
+        elif data["Dividend_Yield"] >= 4: score_qualidade += 2
+    if data.get("ROE") is not None:
+        count_qualidade += 1
+        if data["ROE"] > 20: score_qualidade += 3
+        elif data["ROE"] >= 15: score_qualidade += 2
+    if data.get("Consistencia_Lucro_5A") is not None:
+        count_qualidade += 1
+        if data["Consistencia_Lucro_5A"]: score_qualidade += 3
+    if data.get("Margem_Liquida") is not None:
+        count_qualidade += 1
+        if data["Margem_Liquida"] > 15: score_qualidade += 3
+        elif data["Margem_Liquida"] >= 8: score_qualidade += 2
+    scores['qualidade_renda'] = round(score_qualidade / count_qualidade, 2) if count_qualidade > 0 else 0
+    score_crescimento, count_crescimento = 0, 0
+    crescimento_lpa = data.get("Crescimento_LPA_5A")
+    if crescimento_lpa is not None:
+        count_crescimento += 1
+        if crescimento_lpa > 20: score_crescimento += 3
+        elif crescimento_lpa >= 10: score_crescimento += 2
+        if data.get("P/L") is not None and crescimento_lpa > 0:
+            count_crescimento += 1
+            peg_ratio = data["P/L"] / crescimento_lpa
+            if peg_ratio < 1.0: score_crescimento += 3
+            elif peg_ratio <= 1.5: score_crescimento += 2
+    scores['crescimento'] = round(score_crescimento / count_crescimento, 2) if count_crescimento > 0 else 0
+    return scores
+
+# ==============================================================================
+# 5. GERAÇÃO DE RELATÓRIO E INTERFACE - SEM ALTERAÇÕES
+# ==============================================================================
+def generate_visual_report(ticker, data, scores):
+    pesos = { "Conservador": {"valor": 0.4, "qualidade_renda": 0.5, "crescimento": 0.1}, "Moderado": {"valor": 0.3, "qualidade_renda": 0.4, "crescimento": 0.3}, "Agressivo": {"valor": 0.15, "qualidade_renda": 0.35, "crescimento": 0.5} }
+    final_scores = {p: sum(scores[k] * w[k] for k in w) for p, w in pesos.items()}
+    def create_tooltip(text): return f'<span title="{text}" style="cursor: help; font-weight: bold; color: #007bff;"> (?)</span>'
+    def get_bar_color(score):
+        if score >= 2.0: return '#4CAF50'
+        if score >= 1.0: return '#FFC107'
+        return '#F44336'
+    def create_bar(score):
+        width = min((score / 3) * 100, 100)
+        color = get_bar_color(score)
+        return f"""<div style="width: 100%; background-color: #ddd; border-radius: 5px;"><div style="width: {width}%; background-color: {color}; height: 20px; text-align: center; color: white; line-height: 20px; border-radius: 5px; font-weight: bold;">{score:.2f}</div></div>"""
+    data_html_rows = ""
+    for key, value in data.items():
+        if isinstance(value, bool): formatted_value = "Sim" if value else "Não"
+        elif isinstance(value, (int, float)): formatted_value = f"{value:.2f}"
+        else: formatted_value = "N/D"
+        tooltip_html = create_tooltip(TOOLTIPS.get(key, "Sem descrição."))
+        data_html_rows += f"<tr><td>{key.replace('_', ' ')}{tooltip_html}</td><td>{formatted_value}</td></tr>"
+    html_report = f"""<div style="font-family: Arial, sans-serif; border: 1px solid #e0e0e0; border-radius: 10px; padding: 20px; margin: 15px; max-width: 700px; box-shadow: 0 4px 8px 0 rgba(0,0,0,0.1);"><h1 style="text-align: center; color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">Análise Quantitativa: {ticker.upper()}</h1><h2 style="color: #444;">Scores por Pilar (0-3)</h2><table style="width: 100%; border-collapse: collapse;"><tr><td style="width: 30%; padding: 8px 0;">Valor (Graham){create_tooltip('Mede se a ação está barata.')}</td><td>{create_bar(scores['valor'])}</td></tr><tr><td style="padding: 8px 0;">Qualidade & Renda (Buffett){create_tooltip('Mede a saúde financeira e a capacidade de pagar dividendos.')}</td><td>{create_bar(scores['qualidade_renda'])}</td></tr><tr><td style="padding: 8px 0;">Crescimento (Lynch){create_tooltip('Mede o potencial de crescimento dos lucros.')}</td><td>{create_bar(scores['crescimento'])}</td></tr></table><h2 style="color: #444; margin-top: 25px;">Pontuação Final por Perfil (0-3)</h2><table style="width: 100%; border-collapse: collapse;"><tr><td style="width: 30%; padding: 8px 0;">Conservador</td><td>{create_bar(final_scores['Conservador'])}</td></tr><tr><td style="padding: 8px 0;">Moderado</td><td>{create_bar(final_scores['Moderado'])}</td></tr><tr><td style="padding: 8px 0;">Agressivo</td><td>{create_bar(final_scores['Agressivo'])}</td></tr></table><h2 style="color: #444; margin-top: 25px;">Dados Coletados das APIs</h2><table style="width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed;"><thead style="background-color: #f2f2f2;"><tr><th style="padding: 8px; text-align: left; width: 40%;">Métrica</th><th style="padding: 8px; text-align: left;">Valor</th></tr></thead><tbody>{data_html_rows}</tbody></table></div>"""
+    display(HTML(html_report))
+
+# --- Interface ---
+text_input = widgets.Text(
+    value='BBDC3, AURE3, PETR4, CMIG4, AAPL',
+    placeholder='Digite os tickers (ex: ITUB4, GOOGL)',
+    description='Ativos:',
+    disabled=False,
+    layout=widgets.Layout(width='500px')
+)
+run_button = widgets.Button(description='Analisar Ativos', button_style='success', tooltip='Clique para iniciar a análise', icon='search')
+output_area = widgets.Output()
+def on_button_clicked(b):
+    with output_area:
+        clear_output(wait=True)
+        tickers_input = text_input.value
+        tickers_list = [ticker.strip() for ticker in tickers_input.split(',')]
+        for ticker in tickers_list:
+            if not ticker: continue
+            asset_data = get_asset_data(ticker)
+            if asset_data:
+                asset_scores = analyze_asset(asset_data)
+                generate_visual_report(find_correct_ticker(ticker), asset_data, asset_scores)
+run_button.on_click(on_button_clicked)
+
+display(HTML("<h2>Ferramenta de Análise v4 (Ticker Inteligente)</h2>"))
+display(HTML("<p>Instruções: Digite os tickers (ex: PETR4, AAPL) sem se preocupar com o sufixo. O sistema tentará corrigi-lo automaticamente.</p>"))
+display(text_input, run_button, output_area)
