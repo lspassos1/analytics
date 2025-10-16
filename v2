@@ -1,0 +1,211 @@
+# CÉLULA ÚNICA - Copie e cole todo este código em uma única célula do Colab
+
+# ==============================================================================
+# 1. INSTALAÇÃO E IMPORTAÇÃO DAS BIBLIOTECAS
+# ==============================================================================
+!pip install yfinance -q
+
+import yfinance as yf
+import pandas as pd
+import ipywidgets as widgets
+from IPython.display import display, clear_output, HTML
+
+# ==============================================================================
+# 2. FUNÇÃO DE COLETA DE DADOS (API REAL)
+# ==============================================================================
+def get_asset_data_from_api(ticker):
+    """
+    Busca dados financeiros de um ativo usando a API do yfinance.
+    Lida com a falta de dados retornando 'None' para métricas não encontradas.
+    """
+    try:
+        print(f"Buscando dados para {ticker}...")
+        stock = yf.Ticker(ticker)
+        info = stock.info
+
+        data = {
+            "ticker": ticker,
+            "P/L": info.get('trailingPE'),
+            "P/VP": info.get('priceToBook'),
+            "Divida_Liquida_EBITDA": info.get('debtToEbitda'),
+            "EV_EBITDA": info.get('enterpriseToEbitda'),
+            "Dividend_Yield": (info.get('dividendYield') or 0) * 100,
+            "ROE": (info.get('returnOnEquity') or 0) * 100,
+            "Margem_Liquida": (info.get('profitMargins') or 0) * 100,
+            "Crescimento_LPA_5A": (info.get('earningsQuarterlyGrowth') or 0) * 100
+        }
+        
+        try:
+            financials = stock.financials
+            if 'Net Income' in financials.index:
+                net_income_last_4_years = financials.loc['Net Income'].dropna()
+                data["Consistencia_Lucro_5A"] = all(net_income_last_4_years > 0)
+            else:
+                data["Consistencia_Lucro_5A"] = False
+        except Exception:
+            data["Consistencia_Lucro_5A"] = False
+        
+        if data['P/L'] is None or data['P/VP'] is None:
+            print(f"AVISO: Faltam métricas essenciais para {ticker}.")
+            return None
+
+        return data
+    except Exception as e:
+        print(f"Erro ao buscar dados para {ticker}: {e}")
+        return None
+
+# ==============================================================================
+# 3. FUNÇÃO DE ANÁLISE (SCORECARD)
+# ==============================================================================
+def analyze_asset(data):
+    """
+    Aplica o scorecard quantitativo. Lida com valores None (faltantes).
+    """
+    scores = {}
+
+    # --- Pilar 1: Valor ---
+    score_valor = 0
+    if data["P/L"] is not None and data["P/L"] < 10: score_valor += 3
+    elif data["P/L"] is not None and data["P/L"] <= 15: score_valor += 2
+    if data["P/VP"] is not None and data["P/VP"] < 1.0: score_valor += 3
+    elif data["P/VP"] is not None and data["P/VP"] <= 1.5: score_valor += 2
+    if data["Divida_Liquida_EBITDA"] is not None and data["Divida_Liquida_EBITDA"] < 1.5: score_valor += 3
+    elif data["Divida_Liquida_EBITDA"] is not None and data["Divida_Liquida_EBITDA"] <= 3.0: score_valor += 2
+    if data["EV_EBITDA"] is not None and data["EV_EBITDA"] < 8: score_valor += 3
+    elif data["EV_EBITDA"] is not None and data["EV_EBITDA"] <= 12: score_valor += 2
+    scores['valor'] = round(score_valor / 4, 2)
+
+    # --- Pilar 2: Qualidade & Renda ---
+    score_qualidade = 0
+    if data["Dividend_Yield"] > 6: score_qualidade += 3
+    elif data["Dividend_Yield"] >= 4: score_qualidade += 2
+    if data["ROE"] > 20: score_qualidade += 3
+    elif data["ROE"] >= 15: score_qualidade += 2
+    if data["Consistencia_Lucro_5A"]: score_qualidade += 3
+    if data["Margem_Liquida"] > 15: score_qualidade += 3
+    elif data["Margem_Liquida"] >= 8: score_qualidade += 2
+    scores['qualidade_renda'] = round(score_qualidade / 4, 2)
+
+    # --- Pilar 3: Crescimento ---
+    score_crescimento = 0
+    if data["Crescimento_LPA_5A"] > 20: score_crescimento += 3
+    elif data["Crescimento_LPA_5A"] >= 10: score_crescimento += 2
+    if data["P/L"] is not None and data["Crescimento_LPA_5A"] > 0:
+        peg_ratio = data["P/L"] / data["Crescimento_LPA_5A"]
+        if peg_ratio < 1.0: score_crescimento += 3
+        elif peg_ratio <= 1.5: score_crescimento += 2
+    scores['crescimento'] = round(score_crescimento / 2, 2)
+
+    return scores
+
+# ==============================================================================
+# 4. FUNÇÃO DE GERAÇÃO DE RELATÓRIO (VISUALMENTE MELHORADO)
+# ==============================================================================
+def generate_visual_report(ticker, data, scores):
+    """Gera um relatório HTML estilizado com a análise do ativo."""
+    
+    # --- Cálculo dos Scores Finais ---
+    pesos = {
+        "Conservador": {"valor": 0.4, "qualidade_renda": 0.5, "crescimento": 0.1},
+        "Moderado":    {"valor": 0.3, "qualidade_renda": 0.4, "crescimento": 0.3},
+        "Agressivo":   {"valor": 0.15, "qualidade_renda": 0.35, "crescimento": 0.5}
+    }
+    final_scores = {}
+    for perfil, peso in pesos.items():
+        score_final = (scores['valor'] * peso['valor'] +
+                       scores['qualidade_renda'] * peso['qualidade_renda'] +
+                       scores['crescimento'] * peso['crescimento'])
+        final_scores[perfil] = score_final
+
+    # --- Funções Auxiliares para o HTML ---
+    def get_bar_color(score):
+        if score >= 2.0: return '#4CAF50' # Verde
+        if score >= 1.0: return '#FFC107' # Ambar
+        return '#F44336' # Vermelho
+        
+    def create_bar(score):
+        width = (score / 3) * 100
+        color = get_bar_color(score)
+        return f"""
+        <div style="width: 100%; background-color: #ddd; border-radius: 5px;">
+          <div style="width: {width}%; background-color: {color}; height: 20px; text-align: center; color: white; line-height: 20px; border-radius: 5px; font-weight: bold;">
+            {score:.2f}
+          </div>
+        </div>
+        """
+
+    # --- Construção da Tabela de Dados ---
+    data_html_rows = ""
+    for key, value in data.items():
+        formatted_value = f"{value:.2f}" if isinstance(value, (int, float)) else str(value)
+        data_html_rows += f"<tr><td>{key.replace('_', ' ')}</td><td>{formatted_value}</td></tr>"
+
+    # --- Construção do HTML do Relatório ---
+    html_report = f"""
+    <div style="font-family: Arial, sans-serif; border: 1px solid #e0e0e0; border-radius: 10px; padding: 20px; margin: 15px; max-width: 700px; box-shadow: 0 4px 8px 0 rgba(0,0,0,0.1);">
+      <h1 style="text-align: center; color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">Análise Quantitativa: {ticker.upper()}</h1>
+      
+      <h2 style="color: #444;">Scores por Pilar (0-3)</h2>
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr><td style="width: 30%; padding: 8px 0;">Valor (Graham)</td><td>{create_bar(scores['valor'])}</td></tr>
+        <tr><td style="padding: 8px 0;">Qualidade & Renda (Buffett)</td><td>{create_bar(scores['qualidade_renda'])}</td></tr>
+        <tr><td style="padding: 8px 0;">Crescimento (Lynch)</td><td>{create_bar(scores['crescimento'])}</td></tr>
+      </table>
+      
+      <h2 style="color: #444; margin-top: 25px;">Pontuação Final por Perfil (0-3)</h2>
+      <table style="width: 100%; border-collapse: collapse;">
+        <tr><td style="width: 30%; padding: 8px 0;">Conservador</td><td>{create_bar(final_scores['Conservador'])}</td></tr>
+        <tr><td style="padding: 8px 0;">Moderado</td><td>{create_bar(final_scores['Moderado'])}</td></tr>
+        <tr><td style="padding: 8px 0;">Agressivo</td><td>{create_bar(final_scores['Agressivo'])}</td></tr>
+      </table>
+      
+      <h2 style="color: #444; margin-top: 25px;">Dados Coletados da API</h2>
+      <table style="width: 100%; border-collapse: collapse; font-size: 14px;">
+        <thead style="background-color: #f2f2f2;">
+          <tr><th style="padding: 8px; text-align: left;">Métrica</th><th style="padding: 8px; text-align: left;">Valor</th></tr>
+        </thead>
+        <tbody>{data_html_rows}</tbody>
+      </table>
+    </div>
+    """
+    display(HTML(html_report))
+
+# ==============================================================================
+# 5. CRIAÇÃO DA INTERFACE E LÓGICA DE EXECUÇÃO
+# ==============================================================================
+text_input = widgets.Text(
+    value='ITSA4.SA, BBSE3.SA, WEGE3.SA, AAPL',
+    placeholder='Digite os tickers separados por vírgula',
+    description='Ativos:',
+    disabled=False,
+    layout=widgets.Layout(width='500px')
+)
+run_button = widgets.Button(
+    description='Analisar Ativos',
+    button_style='success',
+    tooltip='Clique para iniciar a análise dos ativos inseridos',
+    icon='search'
+)
+output_area = widgets.Output()
+
+def on_button_clicked(b):
+    with output_area:
+        clear_output(wait=True)
+        tickers_input = text_input.value
+        if not tickers_input:
+            display(HTML("<p style='color: red;'>Por favor, insira pelo menos um ticker para analisar.</p>"))
+            return
+
+        tickers_list = [ticker.strip().upper() for ticker in tickers_input.split(',')]
+        for ticker in tickers_list:
+            if not ticker: continue
+            asset_data = get_asset_data_from_api(ticker)
+            if asset_data:
+                asset_scores = analyze_asset(asset_data)
+                generate_visual_report(ticker, asset_data, asset_scores)
+
+run_button.on_click(on_button_clicked)
+
+display(HTML("<h2>Ferramenta de Análise Quantitativa de Ações</h2>"))
+display(HTML("<p>Instruções: Digite os tickers (separados por vírgula) e clique no botão. Use o sufixo <b>.SA</b> para ações brasileiras.</p>"))
+display(text_input, run_button, output_area)
