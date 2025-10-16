@@ -1,0 +1,208 @@
+# CÉLULA ÚNICA - Copie e cole todo este código em uma única célula do Colab
+
+# ==============================================================================
+# 1. INSTALAÇÃO E IMPORTAÇÃO DAS BIBLIOTECAS
+# ==============================================================================
+# Instala a biblioteca do Yahoo Finance de forma silenciosa
+!pip install yfinance -q
+
+import yfinance as yf
+import pandas as pd
+import ipywidgets as widgets
+from IPython.display import display, clear_output
+
+# ==============================================================================
+# 2. FUNÇÃO DE COLETA DE DADOS (AGORA COM API REAL)
+# ==============================================================================
+def get_asset_data_from_api(ticker):
+    """
+    Busca dados financeiros de um ativo usando a API do yfinance.
+    Lida com a falta de dados retornando 'None' para métricas não encontradas.
+    """
+    try:
+        print(f"Buscando dados para {ticker}...")
+        stock = yf.Ticker(ticker)
+        info = stock.info
+
+        # --- Tratamento de dados faltantes usando .get() ---
+        data = {
+            "ticker": ticker,
+            "P/L": info.get('trailingPE'),
+            "P/VP": info.get('priceToBook'),
+            "Divida_Liquida_EBITDA": info.get('debtToEbitda'),
+            "EV_EBITDA": info.get('enterpriseToEbitda'),
+            "Dividend_Yield": (info.get('dividendYield') or 0) * 100,
+            "ROE": (info.get('returnOnEquity') or 0) * 100,
+            "Margem_Liquida": (info.get('profitMargins') or 0) * 100,
+            "Crescimento_LPA_5A": (info.get('earningsQuarterlyGrowth') or 0) * 100 # yfinance nao provê CAGR 5A direto, usamos trimestral como proxy
+        }
+        
+        # Lógica para consistência de lucros (mais complexa, requer dados históricos)
+        try:
+            financials = stock.financials
+            if 'Net Income' in financials.index:
+                net_income_last_4_years = financials.loc['Net Income'].dropna()
+                # Verifica se houve prejuízo (valor negativo) nos últimos anos disponíveis
+                data["Consistencia_Lucro_5A"] = all(net_income_last_4_years > 0)
+            else:
+                data["Consistencia_Lucro_5A"] = False
+        except Exception:
+            data["Consistencia_Lucro_5A"] = False # Se falhar, assume que não é consistente
+        
+        # Se métricas essenciais como P/L ou P/VP não existirem, o ativo pode não ser adequado para análise
+        if data['P/L'] is None or data['P/VP'] is None:
+            print(f"AVISO: Faltam métricas essenciais para {ticker}. Pode ser uma empresa sem lucro ou com dados indisponíveis.")
+            return None
+
+        return data
+    except Exception as e:
+        print(f"Erro ao buscar dados para {ticker}: {e}")
+        return None
+
+# ==============================================================================
+# 3. FUNÇÃO DE ANÁLISE (SCORECARD)
+# ==============================================================================
+def analyze_asset(data):
+    """
+    Aplica o scorecard quantitativo. Lida com valores None (faltantes).
+    """
+    scores = {}
+
+    # --- Pilar 1: Valor ---
+    score_valor = 0
+    # P/L
+    if data["P/L"] is not None and data["P/L"] < 10: score_valor += 3
+    elif data["P/L"] is not None and data["P/L"] <= 15: score_valor += 2
+    # P/VP
+    if data["P/VP"] is not None and data["P/VP"] < 1.0: score_valor += 3
+    elif data["P/VP"] is not None and data["P/VP"] <= 1.5: score_valor += 2
+    # Dívida Líquida / EBITDA
+    if data["Divida_Liquida_EBITDA"] is not None and data["Divida_Liquida_EBITDA"] < 1.5: score_valor += 3
+    elif data["Divida_Liquida_EBITDA"] is not None and data["Divida_Liquida_EBITDA"] <= 3.0: score_valor += 2
+    # EV/EBITDA
+    if data["EV_EBITDA"] is not None and data["EV_EBITDA"] < 8: score_valor += 3
+    elif data["EV_EBITDA"] is not None and data["EV_EBITDA"] <= 12: score_valor += 2
+    scores['valor'] = round(score_valor / 4, 2)
+
+    # --- Pilar 2: Qualidade & Renda ---
+    score_qualidade = 0
+    # Dividend Yield
+    if data["Dividend_Yield"] > 6: score_qualidade += 3
+    elif data["Dividend_Yield"] >= 4: score_qualidade += 2
+    # ROE
+    if data["ROE"] > 20: score_qualidade += 3
+    elif data["ROE"] >= 15: score_qualidade += 2
+    # Consistência de Lucro
+    if data["Consistencia_Lucro_5A"]: score_qualidade += 3
+    # Margem Líquida
+    if data["Margem_Liquida"] > 15: score_qualidade += 3
+    elif data["Margem_Liquida"] >= 8: score_qualidade += 2
+    scores['qualidade_renda'] = round(score_qualidade / 4, 2)
+
+    # --- Pilar 3: Crescimento ---
+    score_crescimento = 0
+    # Crescimento LPA
+    if data["Crescimento_LPA_5A"] > 20: score_crescimento += 3
+    elif data["Crescimento_LPA_5A"] >= 10: score_crescimento += 2
+    # PEG Ratio (calculado na hora)
+    if data["P/L"] is not None and data["Crescimento_LPA_5A"] > 0:
+        peg_ratio = data["P/L"] / data["Crescimento_LPA_5A"]
+        if peg_ratio < 1.0: score_crescimento += 3
+        elif peg_ratio <= 1.5: score_crescimento += 2
+    scores['crescimento'] = round(score_crescimento / 2, 2) # Pilar com 2 métricas principais
+
+    return scores
+
+# ==============================================================================
+# 4. FUNÇÃO DE GERAÇÃO DE RELATÓRIO
+# ==============================================================================
+def generate_report(ticker, data, scores):
+    """Gera um relatório final com a análise e scores para cada perfil de investidor."""
+    print("\n" + "="*60)
+    print(f" RELATÓRIO DE ANÁLISE QUANTITATIVA: {ticker.upper()} ")
+    print("="*60)
+
+    print("\n--- DADOS COLETADOS ---")
+    # Limpa e formata os dados para exibição
+    display_data = {k: (f"{v:.2f}" if isinstance(v, (int, float)) else v) for k, v in data.items()}
+    df_data = pd.DataFrame([display_data])
+    print(df_data.to_string(index=False))
+
+    print("\n--- SCORES POR PILAR (Escala 0-3) ---")
+    print(f"Score de Valor (Graham/Bazin)...........: {scores['valor']}")
+    print(f"Score de Qualidade & Renda (Buffett/Bazin): {scores['qualidade_renda']}")
+    print(f"Score de Crescimento (Lynch/Fisher).......: {scores['crescimento']}")
+
+    pesos = {
+        "Conservador": {"valor": 0.4, "qualidade_renda": 0.5, "crescimento": 0.1},
+        "Moderado":    {"valor": 0.3, "qualidade_renda": 0.4, "crescimento": 0.3},
+        "Agressivo":   {"valor": 0.15, "qualidade_renda": 0.35, "crescimento": 0.5}
+    }
+
+    final_scores = {}
+    for perfil, peso in pesos.items():
+        score_final = (scores['valor'] * peso['valor'] +
+                       scores['qualidade_renda'] * peso['qualidade_renda'] +
+                       scores['crescimento'] * peso['crescimento'])
+        final_scores[perfil] = score_final
+
+    print("\n--- PONTUAÇÃO FINAL POR PERFIL (Escala 0-3) ---")
+    for perfil, score in final_scores.items():
+        print(f"Perfil {perfil.ljust(12)}: {score:.2f}")
+
+    print("\n" + "="*60)
+    print(" AVISO: Esta é uma análise quantitativa e educacional. ")
+    print(" Não constitui recomendação de investimento. Faça sua própria pesquisa. ")
+    print("="*60 + "\n\n")
+
+# ==============================================================================
+# 5. CRIAÇÃO DA INTERFACE E LÓGICA DE EXECUÇÃO
+# ==============================================================================
+
+# Cria os componentes da interface
+text_input = widgets.Text(
+    value='ITSA4.SA, BBSE3.SA, WEGE3.SA',
+    placeholder='Digite os tickers separados por vírgula',
+    description='Ativos:',
+    disabled=False,
+    layout=widgets.Layout(width='500px')
+)
+
+run_button = widgets.Button(
+    description='Analisar Ativos',
+    button_style='success', # 'success', 'info', 'warning', 'danger' or ''
+    tooltip='Clique para iniciar a análise dos ativos inseridos',
+    icon='search'
+)
+
+# Área onde o output será impresso
+output_area = widgets.Output()
+
+# Função que é chamada quando o botão é clicado
+def on_button_clicked(b):
+    with output_area:
+        clear_output(wait=True) # Limpa a saída anterior
+        tickers_input = text_input.value
+        if not tickers_input:
+            print("Por favor, insira pelo menos um ticker para analisar.")
+            return
+
+        tickers_list = [ticker.strip().upper() for ticker in tickers_input.split(',')]
+
+        for ticker in tickers_list:
+            if not ticker: continue
+            
+            asset_data = get_asset_data_from_api(ticker)
+            if asset_data:
+                asset_scores = analyze_asset(asset_data)
+                generate_report(ticker, asset_data, asset_scores)
+
+# Associa a função ao evento de clique do botão
+run_button.on_click(on_button_clicked)
+
+# Exibe a interface
+print("--- Ferramenta de Análise Quantitativa de Ações ---")
+print("Instruções: Digite os tickers das ações desejadas (separados por vírgula) e clique no botão.")
+print("Para ações brasileiras, use o sufixo '.SA' (ex: PETR4.SA). Para americanas, apenas o ticker (ex: AAPL, GOOG).")
+
+display(text_input, run_button, output_area)
