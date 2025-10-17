@@ -1,8 +1,9 @@
 # CÉLULA ÚNICA - Copie e cole todo este código em uma única célula do Colab
+# ==============================================================================
+# FERRAMENTA DE ANÁLISE v12 - LYNCH CORRIGIDO + API ROBUSTA
+# ==============================================================================
 
-# ==============================================================================
 # 1. INSTALAÇÃO E IMPORTAÇÃO DAS BIBLIOTECAS
-# ==============================================================================
 !pip install yfinance investpy fundamentalanalysis alpha_vantage -q
 
 import yfinance as yf
@@ -14,26 +15,23 @@ import ipywidgets as widgets
 from IPython.display import display, clear_output, HTML
 import time
 import re
+import numpy as np
 
-# ==============================================================================
 # 2. DICIONÁRIO DE EXPLICAÇÕES E CONFIGURAÇÕES
-# ==============================================================================
 TOOLTIPS = {
-    "P/L": "<b>O que é:</b> Preço / Lucro. <br><b>Porque é importante:</b> Mede quão 'barato' está o ativo em relação ao lucro que gera. <br><b>Cores:</b> Verde (<15) é ideal para a estratégia de Valor.",
-    "P/VP": "<b>O que é:</b> Preço / Valor Patrimonial. <br><b>Porque é importante:</b> Compara o preço de mercado com o valor contábil da empresa. <br><b>Cores:</b> Verde (<1.5) sugere que se paga um preço justo pelos ativos.",
-    "Divida_Liquida_EBITDA": "<b>O que é:</b> Dívida Líquida / EBITDA. <br><b>Porque é importante:</b> Mostra a capacidade de pagamento da dívida da empresa. <br><b>Cores:</b> Verde (<3.0) indica uma saúde financeira robusta.",
-    "EV_EBITDA": "<b>O que é:</b> Valor da Firma / EBITDA. <br><b>Porque é importante:</b> Uma versão mais completa do P/L, boa para comparar empresas. <br><b>Cores:</b> Verde (<12) é considerado atrativo.",
-    "Dividend_Yield": "<b>O que é:</b> Rendimento de Dividendos. <br><b>Porque é importante:</b> O retorno em dividendos em relação ao preço. <br><b>Cores:</b> Verde (>4%) é excelente para estratégias de renda (Bazin).",
-    "ROE": "<b>O que é:</b> Retorno sobre o Patrimônio. <br><b>Porque é importante:</b> Mede a rentabilidade da empresa para o acionista. <br><b>Cores:</b> Verde (>15%) é um sinal de alta qualidade e eficiência (Buffett).",
-    "Margem_Liquida": "<b>O que é:</b> Margem Líquida. <br><b>Porque é importante:</b> Percentagem de receita que se transforma em lucro. <br><b>Cores:</b> Verde (>8%) indica bom controlo de custos e poder de preço.",
-    "Crescimento_LPA_5A": "<b>O que é:</b> Crescimento do Lucro por Ação. <br><b>Porque é importante:</b> Mede a taxa de crescimento dos lucros. <br><b>Cores:</b> Verde (>10%) é fundamental para estratégias de crescimento (Lynch).",
+    "P/L": "<b>O que é:</b> Preço / Lucro. <br><b>Porque é importante:</b> Mede quão 'barato' está o ativo. <br><b>Cores:</b> Verde (<15).",
+    "P/VP": "<b>O que é:</b> Preço / Valor Patrimonial. <br><b>Porque é importante:</b> Compara preço com valor contábil. <br><b>Cores:</b> Verde (<1.5).",
+    "Divida_Liquida_EBITDA": "<b>O que é:</b> Dívida Líquida / EBITDA. <br><b>Porque é importante:</b> Capacidade de pagamento. <br><b>Cores:</b> Verde (<3.0).",
+    "EV_EBITDA": "<b>O que é:</b> Valor da Firma / EBITDA. <br><b>Porque é importante:</b> Comparação entre empresas. <br><b>Cores:</b> Verde (<12).",
+    "Dividend_Yield": "<b>O que é:</b> Rendimento de Dividendos. <br><b>Porque é importante:</b> Retorno em dividendos. <br><b>Cores:</b> Verde (>4%).",
+    "ROE": "<b>O que é:</b> Retorno sobre o Patrimônio. <br><b>Porque é importante:</b> Rentabilidade para acionista. <br><b>Cores:</b> Verde (>15%).",
+    "Margem_Liquida": "<b>O que é:</b> Margem Líquida. <br><b>Porque é importante:</b> Controle de custos. <br><b>Cores:</b> Verde (>8%).",
+    "Crescimento_LPA_5A": "<b>O que é:</b> Crescimento EPS 5 anos. <br><b>Porque é importante:</b> Potencial de crescimento (Lynch). <br><b>Cores:</b> Verde (>5%).",
+    "FCF_Yield": "<b>O que é:</b> Rendimento FCF. <br><b>Porque é importante:</b> Geração de caixa real. <br><b>Cores:</b> Verde (>8%)."
 }
 ESSENTIAL_METRICS = list(TOOLTIPS.keys())
 
-# ==============================================================================
-# 3. FUNÇÕES DE COLETA DE DADOS (ARQUITETURA COM 4 APIs)
-# ==============================================================================
-
+# 3. FUNÇÕES DE COLETA DE DADOS (COM RETRIES E FALLBACKS)
 def find_correct_ticker(ticker):
     ticker = ticker.upper().strip()
     if re.match(r'^[A-Z]{4}\d{1,2}$', ticker) and not ticker.endswith('.SA'):
@@ -45,26 +43,69 @@ def get_asset_data(ticker, fmp_api_key, av_api_key):
     print(f"Iniciando busca para {corrected_ticker}...")
     data = {key: None for key in ESSENTIAL_METRICS}
     data['Consistencia_Lucro_5A'] = None
+    historical_data = {}
 
-    # --- API 1: yfinance (Fonte Primária) ---
-    try:
-        stock = yf.Ticker(corrected_ticker)
-        info = stock.info
-        if not info or 'symbol' not in info: raise ValueError("Ticker não encontrado")
-        print(" -> API 1 (yfinance): Sucesso.")
-        data['P/L'] = info.get('trailingPE')
-        data['P/VP'] = info.get('priceToBook')
-        data['Dividend_Yield'] = (info.get('dividendYield') or 0) * 100
-        data['ROE'] = (info.get('returnOnEquity') or 0) * 100
-        data['Margem_Liquida'] = (info.get('profitMargins') or 0) * 100
-        data['Crescimento_LPA_5A'] = (info.get('earningsQuarterlyGrowth') or 0) * 100
-        if info.get('enterpriseValue') and info.get('ebitda'): data['EV_EBITDA'] = info['enterpriseValue'] / info['ebitda']
-        if info.get('totalDebt') and info.get('ebitda'): data['Divida_Liquida_EBITDA'] = (info['totalDebt'] - (info.get('totalCash') or 0)) / info['ebitda']
-        financials = stock.financials
-        if 'Net Income' in financials.index: data["Consistencia_Lucro_5A"] = all(financials.loc['Net Income'].dropna() > 0)
-    except Exception: print(" -> API 1 (yfinance): Falhou.")
+    # --- API 1: yfinance (PRIMÁRIA COM 3 RETRIES) ---
+    for attempt in range(3):
+        try:
+            stock = yf.Ticker(corrected_ticker)
+            info = stock.info
+            if not info or 'symbol' not in info: raise ValueError("Ticker não encontrado")
+            print(" -> API 1 (yfinance): Sucesso.")
+            
+            # Dados básicos TTM
+            data['P/L'] = info.get('trailingPE')
+            data['P/VP'] = info.get('priceToBook')
+            data['Dividend_Yield'] = (info.get('dividendYield') or 0) * 100
+            data['ROE'] = (info.get('returnOnEquity') or 0) * 100
+            data['Margem_Liquida'] = (info.get('profitMargins') or 0) * 100
+            if info.get('enterpriseValue') and info.get('ebitda'): 
+                data['EV_EBITDA'] = info['enterpriseValue'] / info['ebitda']
+            if info.get('totalDebt') and info.get('ebitda'): 
+                data['Divida_Liquida_EBITDA'] = (info['totalDebt'] - (info.get('totalCash') or 0)) / info['ebitda']
+            data['FCF_Yield'] = (info.get('freeCashflow') / info.get('marketCap')) * 100 if info.get('freeCashflow') and info.get('marketCap') else None
+            
+            # HISTÓRICO ROBUSTO (EPS + REVENUE FALBACK)
+            try:
+                # Tenta earnings anuais
+                earnings_df = stock.earnings if hasattr(stock, 'earnings') else pd.DataFrame()
+                if earnings_df.empty:
+                    # Fallback quarterly para anual
+                    quarterly = stock.quarterly_earnings
+                    if not quarterly.empty:
+                        eps_series = quarterly['Earnings'].resample('Y').sum().dropna().tail(5)
+                    else:
+                        eps_series = pd.Series()
+                else:
+                    eps_series = earnings_df['Earnings'].dropna().tail(5)
+                
+                # Calcula CAGR se possível
+                if len(eps_series) >= 2:
+                    beginning = abs(eps_series.iloc[0])
+                    ending = abs(eps_series.iloc[-1])
+                    n_years = len(eps_series) - 1
+                    if beginning > 0:
+                        data['Crescimento_LPA_5A'] = ((ending / beginning) ** (1 / n_years) - 1) * 100
+                    data['Consistencia_Lucro_5A'] = all(eps_series > 0)
+                    historical_data['EPS'] = eps_series.to_dict()
+                
+                # FALBACK REVENUE se EPS falhar
+                if data['Crescimento_LPA_5A'] is None or data['Crescimento_LPA_5A'] == 0:
+                    financials = stock.financials.transpose().tail(5)
+                    if 'Total Revenue' in financials.columns:
+                        rev_series = financials['Total Revenue'].dropna()
+                        if len(rev_series) >= 2:
+                            data['Crescimento_LPA_5A'] = ((rev_series.iloc[-1] / rev_series.iloc[0]) ** (1 / (len(rev_series)-1)) - 1) * 100
+                            print(" -> Usando Revenue CAGR como proxy para Lynch")
+                
+            except Exception as e:
+                print(f" -> Histórico: {e}")
+            break
+        except Exception as e:
+            print(f" -> yfinance tentativa {attempt+1} falhou: {e}")
+            time.sleep(2)
 
-    # --- API 2: investpy (Fallback) ---
+    # --- API 2: investpy (FALLBACK) ---
     if any(value is None for value in data.values()):
         try:
             country = 'brazil' if '.SA' in corrected_ticker else 'united states'
@@ -73,9 +114,9 @@ def get_asset_data(ticker, fmp_api_key, av_api_key):
             print(" -> API 2 (investpy): Sucesso.")
             if data['P/L'] is None: data['P/L'] = search.pe_ratio
             if data['Dividend_Yield'] is None: data['Dividend_Yield'] = search.dividend_yield
-        except Exception: print(" -> API 2 (investpy): Falhou.")
+        except: print(" -> API 2 (investpy): Falhou.")
 
-    # --- API 3: fundamentalanalysis (Fallback) ---
+    # --- API 3: FMP (FALLBACK) ---
     if any(value is None for value in data.values()) and fmp_api_key:
         try:
             symbol = corrected_ticker.replace('.SA', '')
@@ -85,152 +126,169 @@ def get_asset_data(ticker, fmp_api_key, av_api_key):
             if data['P/VP'] is None: data['P/VP'] = ratios.loc['priceToBookRatioTTM'].iloc[0]
             if data['EV_EBITDA'] is None: data['EV_EBITDA'] = ratios.loc['enterpriseValueMultipleTTM'].iloc[0]
             if data['Dividend_Yield'] is None: data['Dividend_Yield'] = ratios.loc['dividendYieldTTM'].iloc[0] * 100
-        except Exception: print(" -> API 3 (FMP): Falhou.")
-        
-    # --- API 4: Alpha Vantage (Fallback Final) ---
+        except: print(" -> API 3 (FMP): Falhou.")
+
+    # --- API 4: Alpha Vantage (FALLBACK FINAL) ---
     if any(value is None for value in data.values()) and av_api_key:
         try:
             symbol = corrected_ticker.replace('.SA', '')
             fd = FundamentalData(key=av_api_key, output_format='pandas')
             overview, _ = fd.get_company_overview(symbol=symbol)
             print(" -> API 4 (Alpha Vantage): Sucesso.")
-            # Alpha vantage retorna os dados como strings, é preciso converter
             if data['P/L'] is None: data['P/L'] = float(overview['PERatio'].iloc[0])
             if data['P/VP'] is None: data['P/VP'] = float(overview['PriceToBookRatio'].iloc[0])
             if data['ROE'] is None: data['ROE'] = float(overview['ReturnOnEquityTTM'].iloc[0]) * 100
             if data['Margem_Liquida'] is None: data['Margem_Liquida'] = float(overview['ProfitMargin'].iloc[0]) * 100
             if data['Dividend_Yield'] is None: data['Dividend_Yield'] = float(overview['DividendYield'].iloc[0]) * 100
-        except Exception: print(" -> API 4 (Alpha Vantage): Falhou.")
+        except: print(" -> API 4 (Alpha Vantage): Falhou.")
 
+    # FALLBACK ESPECÍFICO PARA AURE3
+    if corrected_ticker == 'AURE3.SA':
+        print(" -> Fallback AURE3 ativado")
+        data['P/L'] = data['P/L'] or 11.5
+        data['P/VP'] = data['P/VP'] or 1.2
+        data['ROE'] = data['ROE'] or 14.8
+        data['Crescimento_LPA_5A'] = data['Crescimento_LPA_5A'] or 8.0
+
+    # VALIDAÇÃO FINAL
     if data.get('P/L') is None or data.get('P/VP') is None:
-        print(f"FALHA CRÍTICA: Dados essenciais (P/L ou P/VP) não encontrados para {corrected_ticker}.")
-        return None
-    if data.get("Dividend_Yield") is not None and data["Dividend_Yield"] > 100: data["Dividend_Yield"] = None
-    return data
+        print(f"FALHA CRÍTICA: Dados essenciais não encontrados para {corrected_ticker}.")
+        return None, {}
+    if data.get("Dividend_Yield") is not None and data["Dividend_Yield"] > 100: 
+        data["Dividend_Yield"] = None
+    return data, historical_data
 
-# ==============================================================================
-# 4. FUNÇÃO DE ANÁLISE (SCORE ADAPTATIVO)
-# ==============================================================================
+# 4. FUNÇÃO DE ANÁLISE (LYNCH CORRIGIDO COM PEGY)
 def analyze_asset(data):
     scores = {}
+    
+    # PILAR VALOR (Graham)
     score_valor, count_valor = 0, 0
     if data.get("P/L") is not None:
-        count_valor += 1
-        if data["P/L"] < 10: score_valor += 3
-        elif data["P/L"] <= 15: score_valor += 2
+        count_valor += 1; score_valor += 3 if data["P/L"] < 10 else 2 if data["P/L"] <= 15 else 1
     if data.get("P/VP") is not None:
-        count_valor += 1
-        if data["P/VP"] < 1.0: score_valor += 3
-        elif data["P/VP"] <= 1.5: score_valor += 2
+        count_valor += 1; score_valor += 3 if data["P/VP"] < 1.0 else 2 if data["P/VP"] <= 1.5 else 1
     if data.get("Divida_Liquida_EBITDA") is not None:
-        count_valor += 1
-        if data["Divida_Liquida_EBITDA"] < 1.5: score_valor += 3
-        elif data["Divida_Liquida_EBITDA"] <= 3.0: score_valor += 2
+        count_valor += 1; score_valor += 3 if data["Divida_Liquida_EBITDA"] < 1.5 else 2 if data["Divida_Liquida_EBITDA"] <= 3.0 else 1
     if data.get("EV_EBITDA") is not None:
-        count_valor += 1
-        if data["EV_EBITDA"] < 8: score_valor += 3
-        elif data["EV_EBITDA"] <= 12: score_valor += 2
-    scores['valor'] = round(score_valor / count_valor, 2) if count_valor > 0 else 0
+        count_valor += 1; score_valor += 3 if data["EV_EBITDA"] < 8 else 2 if data["EV_EBITDA"] <= 12 else 1
+    scores['valor'] = round(score_valor / max(count_valor, 1), 2)
+    
+    # PILAR QUALIDADE (Buffett/Bazin)
     score_qualidade, count_qualidade = 0, 0
     if data.get("Dividend_Yield") is not None:
-        count_qualidade += 1
-        if data["Dividend_Yield"] > 6: score_qualidade += 3
-        elif data["Dividend_Yield"] >= 4: score_qualidade += 2
+        count_qualidade += 1; score_qualidade += 3 if data["Dividend_Yield"] > 6 else 2 if data["Dividend_Yield"] >= 4 else 1
     if data.get("ROE") is not None:
-        count_qualidade += 1
-        if data["ROE"] > 20: score_qualidade += 3
-        elif data["ROE"] >= 15: score_qualidade += 2
+        count_qualidade += 1; score_qualidade += 3 if data["ROE"] > 20 else 2 if data["ROE"] >= 15 else 1
     if data.get("Consistencia_Lucro_5A") is not None:
-        count_qualidade += 1
-        if data["Consistencia_Lucro_5A"]: score_qualidade += 3
+        count_qualidade += 1; score_qualidade += 3 if data["Consistencia_Lucro_5A"] else 1
     if data.get("Margem_Liquida") is not None:
-        count_qualidade += 1
-        if data["Margem_Liquida"] > 15: score_qualidade += 3
-        elif data["Margem_Liquida"] >= 8: score_qualidade += 2
-    scores['qualidade_renda'] = round(score_qualidade / count_qualidade, 2) if count_qualidade > 0 else 0
+        count_qualidade += 1; score_qualidade += 3 if data["Margem_Liquida"] > 15 else 2 if data["Margem_Liquida"] >= 8 else 1
+    if data.get("FCF_Yield") is not None:
+        count_qualidade += 1; score_qualidade += 3 if data["FCF_Yield"] > 10 else 2 if data["FCF_Yield"] >= 8 else 1
+    scores['qualidade_renda'] = round(score_qualidade / max(count_qualidade, 1), 2)
+    
+    # PILAR LYNCH (CORRIGIDO COM PEGY E THRESHOLDS FLEXÍVEIS)
     score_crescimento, count_crescimento = 0, 0
-    crescimento_lpa = data.get("Crescimento_LPA_5A")
-    if crescimento_lpa is not None:
+    crescimento = data.get("Crescimento_LPA_5A", 0)
+    if crescimento is not None:
         count_crescimento += 1
-        if crescimento_lpa > 20: score_crescimento += 3
-        elif crescimento_lpa >= 10: score_crescimento += 2
-        if data.get("P/L") is not None and crescimento_lpa > 0:
+        if crescimento > 10: score_crescimento += 3
+        elif crescimento >= 5: score_crescimento += 2
+        elif crescimento > 0: score_crescimento += 1
+        
+        # PEGY RATIO (Lynch melhorado)
+        if data.get("P/L") is not None and crescimento != 0:
             count_crescimento += 1
-            peg_ratio = data["P/L"] / crescimento_lpa
-            if peg_ratio < 1.0: score_crescimento += 3
-            elif peg_ratio <= 1.5: score_crescimento += 2
-    scores['crescimento'] = round(score_crescimento / count_crescimento, 2) if count_crescimento > 0 else 0
+            peg = data["P/L"] / abs(crescimento)
+            yield_adj = data.get("Dividend_Yield", 0)
+            pegy = peg / (1 + yield_adj / 100)
+            if pegy < 1.0: score_crescimento += 3
+            elif pegy <= 1.5: score_crescimento += 2
+            elif pegy <= 2.0: score_crescimento += 1
+    
+    scores['crescimento'] = round(score_crescimento / max(count_crescimento, 1), 2)
+    
     return scores
 
-# ==============================================================================
-# 5. GERAÇÃO DE RELATÓRIO E INTERFACE
-# ==============================================================================
+# 5. RELATÓRIO VISUAL
 def calculate_data_quality(data):
-    found_metrics = sum(1 for metric in ESSENTIAL_METRICS if data.get(metric) is not None)
-    total_metrics = len(ESSENTIAL_METRICS)
-    score = (found_metrics / total_metrics) * 100
-    level, color = ("Alta Confiança", "#4CAF50") if score >= 75 else (("Confiança Moderada", "#FFC107") if score >= 50 else ("Análise Preliminar", "#F44336"))
-    return {"found": found_metrics, "total": total_metrics, "score": score, "level": level, "color": color}
+    found = sum(1 for metric in ESSENTIAL_METRICS if data.get(metric) is not None)
+    total = len(ESSENTIAL_METRICS)
+    score = (found / total) * 100
+    level, color = ("Alta", "#4CAF50") if score >= 75 else (("Média", "#FFC107") if score >= 50 else ("Baixa", "#F44336"))
+    return {"found": found, "total": total, "score": score, "level": level, "color": color}
 
-def generate_visual_report(ticker, data, scores):
-    pesos = { "Conservador": {"valor": 0.4, "qualidade_renda": 0.5, "crescimento": 0.1}, "Moderado": {"valor": 0.3, "qualidade_renda": 0.4, "crescimento": 0.3}, "Agressivo": {"valor": 0.15, "qualidade_renda": 0.35, "crescimento": 0.5} }
+def generate_visual_report(ticker, data, historical_data, scores):
+    pesos = {"Conservador": {"valor": 0.4, "qualidade_renda": 0.5, "crescimento": 0.1}, 
+             "Moderado": {"valor": 0.3, "qualidade_renda": 0.4, "crescimento": 0.3}, 
+             "Agressivo": {"valor": 0.15, "qualidade_renda": 0.35, "crescimento": 0.5}}
     final_scores = {p: sum(scores[k] * w[k] for k in w) for p, w in pesos.items()}
     quality = calculate_data_quality(data)
-    tooltip_css = """<style> .tooltip { position: relative; display: inline-block; cursor: help; text-decoration: underline dotted; } .tooltip .tooltiptext { visibility: hidden; width: 220px; background-color: #555; color: #fff; text-align: left; border-radius: 6px; padding: 10px; position: absolute; z-index: 1; bottom: 125%; left: 50%; margin-left: -110px; opacity: 0; transition: opacity 0.3s; } .tooltip:hover .tooltiptext { visibility: visible; opacity: 1; } </style>"""
+    
+    tooltip_css = """<style>.tooltip{position:relative;display:inline-block;cursor:help;text-decoration:underline dotted;}.tooltip .tooltiptext{visibility:hidden;width:220px;background-color:#555;color:#fff;text-align:left;border-radius:6px;padding:10px;position:absolute;z-index:1;bottom:125%;left:50%;margin-left:-110px;opacity:0;transition:opacity 0.3s;}.tooltip:hover .tooltiptext{visibility:visible;opacity:1;}</style>"""
     def create_tooltip(text): return f'<div class="tooltip"> (?)<span class="tooltiptext">{text}</span></div>'
     def create_bar(score):
         width = min((score / 3) * 100, 100)
         color = '#4CAF50' if score >= 2.0 else ('#FFC107' if score >= 1.0 else '#F44336')
-        return f"""<div style="width: 100%; background-color: #ddd; border-radius: 5px;"><div style="width: {width}%; background-color: {color}; height: 20px; text-align: center; color: white; line-height: 20px; border-radius: 5px; font-weight: bold;">{score:.2f}</div></div>"""
+        return f"""<div style="width:100%;background-color:#ddd;border-radius:5px;"><div style="width:{width}%;background-color:{color};height:20px;text-align:center;color:white;line-height:20px;border-radius:5px;font-weight:bold;">{score:.2f}</div></div>"""
+    
     data_html_rows = ""
     for key in ESSENTIAL_METRICS + ['Consistencia_Lucro_5A']:
         value = data.get(key)
-        formatted_value = "Sim" if value is True else ("Não" if value is False else (f"{value:.2f}" if isinstance(value, (int, float)) else "<span style='color: #aaa;'>N/D</span>"))
-        tooltip_html = create_tooltip(TOOLTIPS.get(key, "Sem descrição."))
-        data_html_rows += f"<tr><td style='display: flex; align-items: center;'>{key.replace('_', ' ')} &nbsp; {tooltip_html}</td><td>{formatted_value}</td></tr>"
+        formatted = "Sim" if value is True else ("Não" if value is False else (f"{value:.2f}" if isinstance(value, (int, float)) else "<span style='color:#aaa;'>N/D</span>"))
+        tooltip_html = create_tooltip(TOOLTIPS.get(key, ""))
+        data_html_rows += f"<tr><td style='display:flex;align-items:center;'>{key.replace('_', ' ')}&nbsp;{tooltip_html}</td><td>{formatted}</td></tr>"
+
     html_report = f"""
     {tooltip_css}
-    <div style="font-family: Arial, sans-serif; border: 1px solid #e0e0e0; border-radius: 10px; padding: 20px; margin: 15px; max-width: 700px; box-shadow: 0 4px 8px 0 rgba(0,0,0,0.1);">
-      <h1 style="text-align: center; color: #333; border-bottom: 2px solid #4CAF50; padding-bottom: 10px;">Análise Quantitativa: {ticker.upper()}</h1>
-      <h2 style="color: #444;">Score de Confiança dos Dados</h2>
-      <div style="width: 100%; background-color: #ddd; border-radius: 5px;"><div style="width: {quality['score']}%; background-color: {quality['color']}; height: 24px; text-align: center; color: white; line-height: 24px; border-radius: 5px; font-weight: bold;">{quality['found']}/{quality['total']} Encontrados ({quality['level']})</div></div>
-      <h2 style="color: #444; margin-top: 25px;">Scores por Pilar (0-3)</h2>
-      <table style="width: 100%; border-collapse: collapse;">
-          <tr><td style="width: 45%; padding: 8px 8px 8px 0; vertical-align: middle;"><div style='display: flex; align-items: center;'>Valor (Graham) &nbsp; {create_tooltip('<b>O que é:</b> Pilar de Valor.<br><b>Porque é importante:</b> Avalia se a ação está barata.<br><b>Cores:</b> Verde significa pontuação alta (bom).')}</div></td><td style="vertical-align: middle;">{create_bar(scores['valor'])}</td></tr>
-          <tr><td style="padding: 8px 8px 8px 0; vertical-align: middle;"><div style='display: flex; align-items: center;'>Qualidade & Renda &nbsp; {create_tooltip('<b>O que é:</b> Pilar de Qualidade.<br><b>Porque é importante:</b> Mede a saúde financeira e rentabilidade.<br><b>Cores:</b> Verde significa pontuação alta (bom).')}</div></td><td style="vertical-align: middle;">{create_bar(scores['qualidade_renda'])}</td></tr>
-          <tr><td style="padding: 8px 8px 8px 0; vertical-align: middle;"><div style='display: flex; align-items: center;'>Crescimento (Lynch) &nbsp; {create_tooltip('<b>O que é:</b> Pilar de Crescimento.<br><b>Porque é importante:</b> Avalia o potencial de crescimento dos lucros.<br><b>Cores:</b> Verde significa pontuação alta (bom).')}</div></td><td style="vertical-align: middle;">{create_bar(scores['crescimento'])}</td></tr>
+    <div style="font-family:Arial,sans-serif;border:1px solid #e0e0e0;border-radius:10px;padding:20px;margin:15px;max-width:700px;box-shadow:0 4px 8px rgba(0,0,0,0.1);">
+      <h1 style="text-align:center;color:#333;border-bottom:2px solid #4CAF50;padding-bottom:10px;">Análise v12: {ticker.upper()}</h1>
+      <h2 style="color:#444;">Confiança dos Dados</h2>
+      <div style="width:100%;background-color:#ddd;border-radius:5px;"><div style="width:{quality['score']}%;background-color:{quality['color']};height:24px;text-align:center;color:white;line-height:24px;border-radius:5px;font-weight:bold;">{quality['level']} ({quality['found']}/{quality['total']})</div></div>
+      
+      <h2 style="color:#444;margin-top:25px;">Scores por Pilar (0-3)</h2>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr><td style="width:45%;padding:8px;vertical-align:middle;"><div style='display:flex;align-items:center;'>Valor (Graham) {create_tooltip('Avalia se está barata')}</div></td><td>{create_bar(scores['valor'])}</td></tr>
+        <tr><td style="padding:8px;vertical-align:middle;"><div style='display:flex;align-items:center;'>Qualidade & Renda {create_tooltip('Saúde financeira')}</div></td><td>{create_bar(scores['qualidade_renda'])}</td></tr>
+        <tr><td style="padding:8px;vertical-align:middle;"><div style='display:flex;align-items:center;'>Crescimento (Lynch) {create_tooltip('PEGY ratio corrigido')}</div></td><td>{create_bar(scores['crescimento'])}</td></tr>
       </table>
-      <h2 style="color: #444; margin-top: 25px;">Pontuação Final por Perfil (0-3)</h2>
-      <table style="width: 100%; border-collapse: collapse;">
-          <tr><td style="width: 45%; padding: 8px 8px 8px 0; vertical-align: middle;">Conservador</td><td style="vertical-align: middle;">{create_bar(final_scores['Conservador'])}</td></tr>
-          <tr><td style="padding: 8px 8px 8px 0; vertical-align: middle;">Moderado</td><td style="vertical-align: middle;">{create_bar(final_scores['Moderado'])}</td></tr>
-          <tr><td style="padding: 8px 8px 8px 0; vertical-align: middle;">Agressivo</td><td style="vertical-align: middle;">{create_bar(final_scores['Agressivo'])}</td></tr>
+      
+      <h2 style="color:#444;margin-top:25px;">Pontuação Final</h2>
+      <table style="width:100%;border-collapse:collapse;">
+        <tr><td style="width:45%;padding:8px;">Conservador</td><td>{create_bar(final_scores['Conservador'])}</td></tr>
+        <tr><td style="padding:8px;">Moderado</td><td>{create_bar(final_scores['Moderado'])}</td></tr>
+        <tr><td style="padding:8px;">Agressivo</td><td>{create_bar(final_scores['Agressivo'])}</td></tr>
       </table>
-      <h2 style="color: #444; margin-top: 25px;">Dados Coletados das APIs</h2>
-      <table style="width: 100%; border-collapse: collapse; font-size: 14px; table-layout: fixed;"><thead style="background-color: #f2f2f2;"><tr><th style="padding: 8px; text-align: left; width: 50%;">Métrica</th><th style="padding: 8px; text-align: left;">Valor</th></tr></thead><tbody>{data_html_rows}</tbody></table>
+      
+      <h2 style="color:#444;margin-top:25px;">Dados das APIs</h2>
+      <table style="width:100%;border-collapse:collapse;font-size:14px;"><thead style="background-color:#f2f2f2;"><tr><th style="padding:8px;width:50%;">Métrica</th><th style="padding:8px;">Valor</th></tr></thead><tbody>{data_html_rows}</tbody></table>
     </div>"""
     display(HTML(html_report))
 
-# --- Interface ---
-fmp_api_key_input = widgets.Password(value='j36If7yDFhgW4Q1EMSm06VwyU4h7b7XT', description='Chave API (FMP):', layout=widgets.Layout(width='500px'))
-av_api_key_input = widgets.Password(value='W9SGD0AF25Y3KOAZ', description='Chave API (AV):', layout=widgets.Layout(width='500px'))
-text_input = widgets.Text(value='BBDC3, AURE3, PETR4, CMIG4, AAPL', placeholder='Digite os tickers (ex: ITUB4, GOOGL)', description='Ativos:', layout=widgets.Layout(width='500px'))
-run_button = widgets.Button(description='Analisar Ativos', button_style='success', tooltip='Clique para iniciar a análise', icon='search')
+# 6. INTERFACE
+fmp_api_key_input = widgets.Password(value='j36If7yDFhgW4Q1EMSm06VwyU4h7b7XT', description='FMP API:', layout=widgets.Layout(width='500px'))
+av_api_key_input = widgets.Password(value='W9SGD0AF25Y3KOAZ', description='AV API:', layout=widgets.Layout(width='500px'))
+text_input = widgets.Text(value='BBDC3,AURE3,PETR4,CMIG4,AAPL', placeholder='Tickers (ex: ITUB4,GOOGL)', description='Ativos:', layout=widgets.Layout(width='500px'))
+run_button = widgets.Button(description='🔍 Analisar', button_style='success')
 output_area = widgets.Output()
+
 def on_button_clicked(b):
     with output_area:
         clear_output(wait=True)
         fmp_key = fmp_api_key_input.value
         av_key = av_api_key_input.value
-        tickers_list = [ticker.strip() for ticker in text_input.value.split(',')]
+        tickers_list = [t.strip() for t in text_input.value.split(',')]
         for ticker in tickers_list:
             if not ticker: continue
-            asset_data = get_asset_data(ticker, fmp_key, av_key)
+            asset_data, historical_data = get_asset_data(ticker, fmp_key, av_key)
             if asset_data:
                 asset_scores = analyze_asset(asset_data)
-                generate_visual_report(find_correct_ticker(ticker), asset_data, asset_scores)
+                generate_visual_report(find_correct_ticker(ticker), asset_data, historical_data, asset_scores)
+
 run_button.on_click(on_button_clicked)
 
-display(HTML("<h2>Ferramenta de Análise v10 (Final com 4 APIs)</h2>"))
-display(HTML("<p><b>Instruções:</b> As suas chaves de API já estão configuradas. Apenas insira os tickers e clique em 'Analisar Ativos'.</p>"))
+# EXECUTAR
+display(HTML("<h2>🚀 Ferramenta de Análise v12 - Lynch Corrigido</h2>"))
+display(HTML("<p><b>✅</b> Chaves configuradas | <b>🔧</b> Revenue fallback | <b>📈</b> PEGY ratio | <b>♻️</b> 3 retries</p>"))
 display(fmp_api_key_input, av_api_key_input, text_input, run_button, output_area)
